@@ -1,0 +1,13 @@
+# Python >= 3.10 required (uses union type hints)
+yfinance>=0.2.40
+pandas>=2.0
+pyarrow>=14.0
+pyyaml>=6.0
+openpyxl>=3.1
+requests>=2.31
+beautifulsoup4>=4.12
+python-dateutil>=2.8
+numpy>=1.26
+statsmodels>=0.14    # Phase 2 EDA: ADF, Granger causality, cointegration
+matplotlib>=3.8      # Phase 2 EDA: regime / volatility plots
+scikit-learn>=1.4    # Phase 5 modeling: logistic baseline, walk-forward eval

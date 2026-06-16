@@ -1,0 +1,11 @@
+# Phase 7 — cost assumptions; revisit after checking live Bursa Malaysia fee schedule
+costs:
+  slippage_pct: 0.001       # 0.1% round-trip slippage estimate
+  commission_per_lot: 15    # MYR per contract (approximate Bursa fee)
+  spread_ticks: 2           # typical FCPO bid-ask spread in ticks (1 tick = RM 1/tonne)
+
+position:
+  max_lots: 5
+  initial_capital: 100000   # MYR
+
+execution_lag_days: 1       # signal fires at close → execute at next open

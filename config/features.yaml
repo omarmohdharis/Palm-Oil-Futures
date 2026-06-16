@@ -1,0 +1,16 @@
+# Phase 3 — populated after Phase 2 EDA confirms useful windows
+returns:
+  lags: [1, 2, 3, 5, 10]
+
+rolling_vol:
+  windows: [5, 10, 21]   # trading days
+
+spread:
+  z_score_window: 21      # FCPO-soybean spread z-score lookback
+
+# Phase 4 — revisit thresholds after stationarity / cost analysis
+label:
+  horizon_days: 3
+  buy_threshold: 0.01     # +1% forward return → BUY
+  sell_threshold: -0.01   # -1% forward return → SELL
+  # moves between thresholds are labeled HOLD

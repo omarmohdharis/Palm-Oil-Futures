@@ -1,0 +1,19 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ── Generated data (regenerable from ingestion scripts) ──────────────────────
+data/processed/
+data/features/
+
+# ── Model artifacts & results ────────────────────────────────────────────────
+models/
+results/
+
+# NOTE: data/raw/ is intentionally NOT ignored — it holds manually downloaded,
+# hard-to-reproduce inputs (the FCPO CSV, future MPOB Excel files). Keep those
+# tracked. If you'd rather not commit them, add `data/raw/` here.

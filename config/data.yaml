@@ -1,0 +1,24 @@
+dates:
+  start: "2015-01-01"
+  end: "2026-06-16"
+
+# yfinance tickers for related instruments (all on US exchanges, very clean)
+tickers:
+  soybean_oil: "ZL=F"   # CBOT soybean oil continuous
+  brent: "BZ=F"          # ICE Brent crude continuous
+  wti: "CL=F"            # NYMEX WTI crude continuous
+  usdmyr: "MYR=X"        # USD/MYR spot
+
+fcpo:
+  # Tried in order; coverage is inconsistent — fall back to manual CSV if empty
+  yfinance_candidates:
+    - "FCPO.KL"
+    - "KPO=F"
+  # Any *.csv placed in data/raw/fcpo/ is auto-detected (Investing.com or standard OHLCV)
+
+paths:
+  raw: "data/raw"
+  processed: "data/processed"
+  features: "data/features"
+  models: "models"
+  results: "results"
