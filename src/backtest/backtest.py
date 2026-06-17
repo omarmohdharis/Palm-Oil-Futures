@@ -88,6 +88,37 @@ def _simulate(desired: pd.Series, close: pd.Series, asset_ret: pd.Series,
     return out, sides
 
 
+def _net_sharpe(desired, close, asset_ret, costs, capital, lag) -> float:
+    out, _ = _simulate(desired, close, asset_ret, costs, capital, lag)
+    return _metrics(out["net_ret"], out["equity"], "x")["sharpe"]
+
+
+def adaptive_backtest(oos, close, asset_ret, costs, capital, lag,
+                      candidates=(0.45, 0.50, 0.55, 0.60, 0.65),
+                      block=63, warmup=378):
+    """Honest threshold selection: at each block, pick the confidence threshold
+    that worked best on PAST OOS data only, then apply it to the next block.
+    No future information ever touches the choice — this is the number to trust,
+    unlike the full-sample sweep (which peeks at the test set)."""
+    desired = pd.Series(0.0, index=oos.index)
+    chosen = []
+    n = len(oos)
+    for b in range(warmup, n, block):
+        hist = oos.iloc[:b]
+        best = max(candidates, key=lambda t: _net_sharpe(
+            _gated_position(hist, t), close.iloc[:b], asset_ret.iloc[:b], costs, capital, lag))
+        seg = oos.iloc[b:b + block]
+        desired.loc[seg.index] = _gated_position(seg, best).values
+        chosen.append(best)
+    eval_idx = oos.index[warmup:]
+    out, sides = _simulate(desired, close, asset_ret, costs, capital, lag)
+    ev = out.loc[eval_idx]
+    equity = (1 + ev["net_ret"]).cumprod() * capital
+    m = _metrics(ev["net_ret"], equity, "adaptive (honest)")
+    n_tr = int((sides.loc[eval_idx] > 0).sum())
+    return m, n_tr, pd.Series(chosen)
+
+
 def _metrics(returns: pd.Series, equity: pd.Series, label: str) -> dict:
     ann_ret = (1 + returns).prod() ** (_TRADING_DAYS / len(returns)) - 1
     ann_vol = returns.std() * np.sqrt(_TRADING_DAYS)
@@ -103,13 +134,14 @@ def _metrics(returns: pd.Series, equity: pd.Series, label: str) -> dict:
     }
 
 
-def run_backtest() -> pd.DataFrame:
+def run_backtest(pred_name: str = "oos_predictions.parquet") -> pd.DataFrame:
     cfg = load_config("backtest")
     costs = cfg["costs"]
     capital = cfg["position"]["initial_capital"]
     lag = cfg["execution_lag_days"]
 
-    oos = load_parquet(project_root() / "results" / "phase5" / "oos_predictions.parquet").sort_index()
+    print(f"[backtest] scoring predictions: {pred_name}")
+    oos = load_parquet(project_root() / "results" / "phase5" / pred_name).sort_index()
     close = _fcpo_close().reindex(oos.index)
     asset_ret = close.pct_change().fillna(0.0)
     bh_equity = (1 + asset_ret).cumprod() * capital      # buy & hold benchmark
@@ -133,8 +165,15 @@ def run_backtest() -> pd.DataFrame:
 
     # pick threshold with best net Sharpe for the saved curve
     best_thr, best_m, best_out, best_trades = max(sweep_rows, key=lambda r: r[1]["sharpe"])
-    print(f"\n[best] threshold={best_thr:.2f}  net Sharpe={best_m['sharpe']:.2f}  "
-          f"trades={best_trades}  (was 663 @ thr=0.00)")
+    trades_full = sweep_rows[0][3]   # trade count at thr=0.00 (always-trade)
+    print(f"\n[sweep best — OPTIMISTIC, peeks at test set] threshold={best_thr:.2f}  "
+          f"net Sharpe={best_m['sharpe']:.2f}  trades={best_trades} (was {trades_full} @0.00)")
+
+    # ── honest, no-peeking threshold selection ──
+    am, an_tr, chosen = adaptive_backtest(oos, close, asset_ret, costs, capital, lag)
+    print(f"[adaptive — HONEST, past data only] net Sharpe={am['sharpe']:.2f}  "
+          f"total={am['total_return']:.1%}  maxDD={am['max_drawdown']:.1%}  trades={an_tr}  "
+          f"(thresholds used: {chosen.value_counts().to_dict()})")
 
     # ── full report at the best threshold vs benchmarks ──
     out = best_out
@@ -166,4 +205,5 @@ def run_backtest() -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    run_backtest()
+    import sys
+    run_backtest(sys.argv[1] if len(sys.argv) > 1 else "oos_predictions.parquet")

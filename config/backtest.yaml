@@ -1,8 +1,11 @@
-# Phase 7 — cost assumptions; revisit after checking live Bursa Malaysia fee schedule
+# Phase 7 — cost assumptions, calibrated 2026-06-16 to the real Bursa schedule.
+# Sources: Bursa exchange+clearing ~RM3/side +8% SST; liquid 3rd-month spread ~1 tick.
 costs:
-  slippage_pct: 0.001       # 0.1% round-trip slippage estimate
-  commission_per_lot: 15    # MYR per contract (approximate Bursa fee)
-  spread_ticks: 2           # typical FCPO bid-ask spread in ticks (1 tick = RM 1/tonne)
+  slippage_pct: 0.0005      # 0.05% round-trip — realistic for liquid front-month FCPO
+                            # (was 0.001; 0.1% implied ~4 ticks slippage, too high)
+  commission_per_lot: 15    # MYR/side, all-in (real ~RM13: RM3.2 exch+clearing + ~RM10
+                            # broker); kept conservative on purpose
+  spread_ticks: 1           # liquid 3rd-month FCPO ≈ 1 tick (RM1/tonne); was 2
 
 position:
   max_lots: 5
