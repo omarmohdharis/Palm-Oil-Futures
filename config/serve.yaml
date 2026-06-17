@@ -1,0 +1,27 @@
+# Phase 8 — serving / decision-support configuration.
+
+model:
+  dir: models                       # frozen artifacts live here
+  registry: models/current.json     # pointer to the live model + its threshold
+  # confidence thresholds the freeze step chooses between (picks best on past data)
+  threshold_candidates: [0.45, 0.50, 0.55, 0.60, 0.65]
+
+ibkr:
+  # IB Gateway / TWS must be running and logged into a PAPER account.
+  host: 127.0.0.1
+  port: 7497            # TWS paper = 7497; IB Gateway paper = 4002
+  client_id: 11
+  lookback: "15 D"      # how much history to pull per refresh
+  # FCPO contract — VERIFY these in TWS before trusting; IB symbology varies.
+  contract:
+    symbol: FCPO
+    exchange: MDEX       # Bursa Malaysia Derivatives
+    currency: MYR
+
+signals:
+  log: results/signals/signal_log.parquet
+  report: results/signals/latest_signal.md
+
+monitor:
+  report: results/signals/monitor_report.md
+  min_signals: 20       # don't judge decay until at least this many scored signals
