@@ -28,9 +28,14 @@ For the hands-off FCPO feed (optional but recommended):
    symbology (it varies — don't guess). Correct `ibkr.contract` / `ibkr.port` in
    `config/serve.yaml` from its output, then `python -m src.ingestion.fcpo_ibkr`.
 
-If you skip IBKR, the **drop-folder fallback** works: drop a daily FCPO CSV
-(investing.com export or standard OHLCV) into `data/raw/fcpo/` and the pipeline
-merges it automatically.
+If you skip IBKR, you have two manual options for the FCPO price:
+- **Type it in:** `python -m src.ingestion.fcpo_manual` finds which recent
+  weekdays are missing a price, prompts you for each, and updates the database.
+- **Drop a CSV:** put a daily FCPO CSV (investing.com export or standard OHLCV)
+  into `data/raw/fcpo/` and the pipeline merges it automatically.
+
+Everything else (soybean oil, Brent, WTI, USD/MYR, World Bank price) downloads
+automatically — no manual step.
 
 ---
 
