@@ -35,6 +35,7 @@ def serve(run_monitor: bool = False) -> None:
     from src.ingestion.fcpo_ibkr import fetch_fcpo_ibkr
     from src.features.build_features import build_features
     from src.serving.predict import predict
+    from src.serving.dashboard import build_dashboard
 
     print("=" * 60)
     print("FCPO daily serving loop")
@@ -48,10 +49,16 @@ def serve(run_monitor: bool = False) -> None:
     # prediction is the deliverable — if it fails we want to see it loudly
     predict()
 
+    from src.serving.forecast import make_forecasts, score
+    _step("short-horizon forecast", make_forecasts)
+    _step("score forecasts", score)
+
     if run_monitor:
         from src.serving.monitor import monitor
         print("\n" + "=" * 60)
         monitor()
+
+    _step("refresh dashboard", build_dashboard)    # regenerate results/dashboard.html
 
 
 if __name__ == "__main__":

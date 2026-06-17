@@ -31,11 +31,14 @@ from src.utils.config import load_config, project_root
 
 def fetch_fcpo_ibkr() -> pd.DataFrame | None:
     cfg = load_config("serve")["ibkr"]
-    try:
-        from ib_insync import IB, ContFuture, util
+    try:                                            # ib_async is the maintained fork
+        from ib_async import IB, ContFuture, util
     except ImportError:
-        print("[ibkr] ib_insync not installed — run: pip install ib_insync")
-        return None
+        try:
+            from ib_insync import IB, ContFuture, util
+        except ImportError:
+            print("[ibkr] no IB library — run: pip install ib_async")
+            return None
 
     ib = IB()
     try:

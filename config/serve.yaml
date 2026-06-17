@@ -25,3 +25,9 @@ signals:
 monitor:
   report: results/signals/monitor_report.md
   min_signals: 20       # don't judge decay until at least this many scored signals
+
+forecast:
+  horizons: [1, 2]      # short-horizon direction forecasts (trading days ahead)
+  log: results/signals/forecast_log.parquet
+  report: results/signals/forecast_accuracy.md
+  recent: 60            # window for "recent" accuracy
