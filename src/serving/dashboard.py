@@ -58,6 +58,42 @@ def _bar(label: str, pct: float, color: str) -> str:
             f'<span class="barval">{pct:.0%}</span></div>')
 
 
+def _how_it_works() -> str:
+    """Plain-English explainer of what the model does and how it decides."""
+    steps = [
+        ("1", "It watches markets that move first",
+         "Palm oil rarely moves alone. Soybean oil (its main rival) and crude oil "
+         "often move a day or two before it does. The tool watches those, plus palm "
+         "oil's own recent moves."),
+        ("2", "It learned from ~10 years of history",
+         "It studied thousands of past days and found patterns on its own — like "
+         "&ldquo;when these markets moved this way, palm oil usually went that way next.&rdquo;"),
+        ("3", "It reads today's pattern",
+         "Each day it compares today's market moves to everything it learned, and "
+         "estimates the chance the price goes up vs down over the next few days."),
+        ("4", "It only acts when confident",
+         "A strong, clear pattern &rarr; Buy or Sell. A weak, unsure one &rarr; Hold "
+         "and wait. It doesn't guess."),
+    ]
+    cards = "".join(
+        f'<div style="flex:1;min-width:200px"><div style="display:flex;align-items:center;'
+        f'gap:8px;margin-bottom:4px"><span style="background:#534ab7;color:#fff;width:22px;'
+        f'height:22px;border-radius:50%;display:inline-flex;align-items:center;'
+        f'justify-content:center;font-size:12px;font-weight:700">{n}</span>'
+        f'<b style="font-size:13px">{title}</b></div>'
+        f'<div class="muted" style="font-size:12px;line-height:1.5">{body}</div></div>'
+        for n, title, body in steps)
+    return (f'<div class="card" style="grid-column:1/-1"><h2>How this works (in plain English)</h2>'
+            f'<div style="font-size:13px;margin-bottom:14px">This tool suggests whether to '
+            f'<b>buy</b>, <b>sell</b>, or <b>hold</b> palm oil futures over the next few days. '
+            f'It works like a weather forecaster for prices:</div>'
+            f'<div style="display:flex;gap:22px;flex-wrap:wrap">{cards}</div>'
+            f'<div class="muted" style="font-size:11.5px;margin-top:14px;line-height:1.5">'
+            f'It is not a crystal ball. It is right a bit more often than a coin flip, and was '
+            f'tested only on data it had never seen. Its real strength is steering you away from '
+            f'big losses &mdash; not predicting every move.</div></div>')
+
+
 def _price_panel() -> str:
     """Current FCPO price, recent changes, and a price chart (last ~1 year)."""
     close = _fcpo_close().sort_index()
@@ -154,6 +190,7 @@ def build_dashboard(publish: bool = False) -> None:
 
     fc = _forecast_panel()
     price = _price_panel()
+    how = _how_it_works()
 
     html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -227,6 +264,8 @@ have moved together, and suggests whether to <b>buy</b> (it expects the price to
     <table><tr><th>Date</th><th>Leaning</th><th>How sure</th><th>Suggestion</th></tr>
     {rows}</table>
   </div>
+
+  {how}
 </div>
 
 <div class="disc"><b>This is an educational tool, not financial advice.</b> It is still being
