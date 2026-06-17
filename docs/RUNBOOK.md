@@ -23,9 +23,10 @@ For the hands-off FCPO feed (optional but recommended):
 2. Install **IB Gateway** (or TWS); log into the **paper** account.
 3. Enable the API: Configure → API → Settings → *Enable ActiveX and Socket Clients*.
 4. Confirm the port in `config/serve.yaml` (`ibkr.port`): TWS paper = 7497, IB Gateway paper = 4002.
-5. **Verify the FCPO contract**: IB symbology varies. If `fcpo_ibkr` reports the
-   contract "did not resolve", look up FCPO in TWS and fix `ibkr.contract` in
-   `config/serve.yaml`. Do not assume the defaults are correct.
+5. **Verify the connection & FCPO contract**: run `python -m src.ingestion.ibkr_check`.
+   It confirms the API connection and searches IB for the real palm-oil contract
+   symbology (it varies — don't guess). Correct `ibkr.contract` / `ibkr.port` in
+   `config/serve.yaml` from its output, then `python -m src.ingestion.fcpo_ibkr`.
 
 If you skip IBKR, the **drop-folder fallback** works: drop a daily FCPO CSV
 (investing.com export or standard OHLCV) into `data/raw/fcpo/` and the pipeline
@@ -57,9 +58,14 @@ python -m src.serving.serve            # refresh data → features → signal
 python -m src.serving.serve --monitor  # also score live performance
 ```
 Outputs:
-- `results/signals/latest_signal.md` — today's recommendation (read this)
+- `results/dashboard.html` — **the decision tool**: open in any browser (self-contained)
+- `results/signals/latest_signal.md` — today's recommendation in plain text
 - `results/signals/signal_log.parquet` — every dated call (audit trail)
 - `results/signals/monitor_report.md` — live performance + decay verdict
+
+**Sharing it:** `dashboard.html` is a single self-contained file — email it, or to put
+it online copy it into a `docs/` folder and enable GitHub Pages (note: `results/`
+is gitignored, so move/commit the file deliberately if you want it hosted).
 
 **Scheduling (Windows Task Scheduler):** create a daily task running
 `python -m src.serving.serve --monitor` in this directory. On Linux/macOS use cron.
