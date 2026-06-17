@@ -23,7 +23,8 @@ from src.utils.io import load_parquet
 _COL = {"BUY": "#1d9e75", "SELL": "#d8503a", "HOLD": "#6b7280"}
 
 
-def _svg_lines(series: dict[str, tuple[str, pd.Series]], w=620, h=200, pad=8) -> str:
+def _svg_lines(series: dict[str, tuple[str, pd.Series]], w=620, h=200, pad=8,
+               legend=True) -> str:
     """Tiny dependency-free line chart from one or more equity series."""
     allvals = pd.concat([s for _, s in series.values()])
     lo, hi = float(allvals.min()), float(allvals.max())
@@ -41,11 +42,13 @@ def _svg_lines(series: dict[str, tuple[str, pd.Series]], w=620, h=200, pad=8) ->
             pts.append(f"{x:.1f},{y:.1f}")
         paths.append(f'<polyline fill="none" stroke="{color}" stroke-width="2" '
                      f'points="{" ".join(pts)}"/>')
-    legend = " &nbsp; ".join(
-        f'<span style="color:{c}">&#9632;</span> {k}' for k, (c, _) in series.items())
+    leg = ""
+    if legend:
+        items = " &nbsp; ".join(
+            f'<span style="color:{c}">&#9632;</span> {k}' for k, (c, _) in series.items())
+        leg = f'<div class="muted" style="font-size:12px;margin-top:4px">{items}</div>'
     return (f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" '
-            f'aria-label="equity curve">{"".join(paths)}</svg>'
-            f'<div class="muted" style="font-size:12px;margin-top:4px">{legend}</div>')
+            f'aria-label="line chart">{"".join(paths)}</svg>{leg}')
 
 
 def _bar(label: str, pct: float, color: str) -> str:
@@ -53,6 +56,30 @@ def _bar(label: str, pct: float, color: str) -> str:
             f'<span class="bartrack"><span class="barfill" '
             f'style="width:{pct*100:.0f}%;background:{color}"></span></span>'
             f'<span class="barval">{pct:.0%}</span></div>')
+
+
+def _price_panel() -> str:
+    """Current FCPO price, recent changes, and a price chart (last ~1 year)."""
+    close = _fcpo_close().sort_index()
+    latest = float(close.iloc[-1])
+
+    def chg(n):
+        return close.iloc[-1] / close.iloc[-1 - n] - 1 if len(close) > n else float("nan")
+
+    def tag(c, label):
+        col = _COL["BUY"] if c >= 0 else _COL["SELL"]
+        return (f'<div style="margin-right:22px"><span style="color:{col};font-weight:700">'
+                f'{c:+.1%}</span><div class="k">{label}</div></div>')
+
+    window = close.iloc[-252:]
+    chart = _svg_lines({"price": ("#534ab7", window)}, h=170, legend=False)
+    return (f'<div class="card" style="grid-column:1/-1"><h2>Palm oil price (RM per tonne)</h2>'
+            f'<div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap">'
+            f'<div style="font-size:30px;font-weight:800">{latest:,.0f}</div>'
+            f'<div style="display:flex">{tag(chg(1), "1 day")}{tag(chg(5), "1 week")}'
+            f'{tag(chg(21), "1 month")}</div></div>{chart}'
+            f'<div class="muted" style="font-size:11.5px;margin-top:4px">'
+            f'Last ~1 year of the front-month futures price, through {close.index[-1].date()}.</div></div>')
 
 
 def _forecast_panel() -> str:
@@ -126,6 +153,7 @@ def build_dashboard(publish: bool = False) -> None:
         f'so the safer suggestion is to <b>hold</b> for now.</div>')
 
     fc = _forecast_panel()
+    price = _price_panel()
 
     html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -166,6 +194,8 @@ have moved together, and suggests whether to <b>buy</b> (it expects the price to
       {gated}
     </div>
   </div>
+
+  {price}
 
   {fc}
 
