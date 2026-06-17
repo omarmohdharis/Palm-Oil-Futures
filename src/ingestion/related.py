@@ -8,11 +8,18 @@ Fetch related instruments via yfinance:
 Output: one CSV per instrument in data/raw/related/
 """
 
+import datetime as dt
+
 import pandas as pd
 import yfinance as yf
 
 from src.utils.config import load_config, project_root
 from src.utils.io import save_raw_csv
+
+
+def _default_end() -> str:
+    # yfinance's `end` is EXCLUSIVE, so use tomorrow to include today's bar.
+    return (dt.date.today() + dt.timedelta(days=1)).isoformat()
 
 
 def _download(ticker: str, start: str, end: str) -> pd.DataFrame:
@@ -31,7 +38,7 @@ def _download(ticker: str, start: str, end: str) -> pd.DataFrame:
 def fetch_related(start: str | None = None, end: str | None = None) -> dict[str, pd.DataFrame]:
     cfg = load_config("data")
     start = start or cfg["dates"]["start"]
-    end = end or cfg["dates"]["end"]
+    end = end or _default_end()          # roll forward to today, not the static config date
     raw_dir = project_root() / cfg["paths"]["raw"] / "related"
 
     results: dict[str, pd.DataFrame] = {}

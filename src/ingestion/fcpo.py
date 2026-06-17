@@ -13,6 +13,7 @@ Run with no FCPO files present to see download instructions.
 """
 
 import re
+import datetime as dt
 import pandas as pd
 import yfinance as yf
 from pathlib import Path
@@ -104,7 +105,7 @@ def _try_yfinance(candidates: list[str], start: str, end: str) -> pd.DataFrame |
 def fetch_fcpo(start: str | None = None, end: str | None = None) -> pd.DataFrame | None:
     cfg = load_config("data")
     start = start or cfg["dates"]["start"]
-    end = end or cfg["dates"]["end"]
+    end = end or (dt.date.today() + dt.timedelta(days=1)).isoformat()   # roll forward to today
     raw_dir = project_root() / cfg["paths"]["raw"] / "fcpo"
 
     print("[→] FCPO — attempting yfinance …")
