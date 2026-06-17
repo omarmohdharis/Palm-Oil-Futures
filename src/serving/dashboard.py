@@ -94,28 +94,34 @@ def _how_it_works() -> str:
             f'big losses &mdash; not predicting every move.</div></div>')
 
 
-def _price_panel() -> str:
-    """Current FCPO price, recent changes, and a price chart (last ~1 year)."""
+def _recent_results_panel() -> str:
+    """The model's recent calls and how each one actually turned out."""
+    log = load_parquet(project_root() / load_config("serve")["signals"]["log"]).sort_index()
     close = _fcpo_close().sort_index()
-    latest = float(close.iloc[-1])
+    move = (close.shift(-3) / close - 1.0).reindex(log.index)   # price move over next 3 days
 
-    def chg(n):
-        return close.iloc[-1] / close.iloc[-1 - n] - 1 if len(close) > n else float("nan")
+    rows = []
+    for d, x in log.assign(move=move).tail(8).iloc[::-1].iterrows():
+        sug = x["final_signal"]
+        m = x["move"]
+        if pd.isna(m):
+            move_txt, result = "—", '<span class="muted">⏳ too recent</span>'
+        else:
+            ok = abs(m) <= 0.01 if sug == "HOLD" else (m > 0 if sug == "BUY" else m < 0)
+            move_txt = f"{m:+.1%}"
+            result = '<span style="color:#1d9e75">✅ right</span>' if ok \
+                else '<span style="color:#d8503a">❌ wrong</span>'
+        rows.append(f'<tr><td>{d.date()}</td>'
+                    f'<td><b style="color:{_COL[sug]}">{sug}</b></td>'
+                    f'<td>{move_txt}</td><td>{result}</td></tr>')
 
-    def tag(c, label):
-        col = _COL["BUY"] if c >= 0 else _COL["SELL"]
-        return (f'<div style="margin-right:22px"><span style="color:{col};font-weight:700">'
-                f'{c:+.1%}</span><div class="k">{label}</div></div>')
-
-    window = close.iloc[-252:]
-    chart = _svg_lines({"price": ("#534ab7", window)}, h=170, legend=False)
-    return (f'<div class="card" style="grid-column:1/-1"><h2>Palm oil price (RM per tonne)</h2>'
-            f'<div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap">'
-            f'<div style="font-size:30px;font-weight:800">{latest:,.0f}</div>'
-            f'<div style="display:flex">{tag(chg(1), "1 day")}{tag(chg(5), "1 week")}'
-            f'{tag(chg(21), "1 month")}</div></div>{chart}'
-            f'<div class="muted" style="font-size:11.5px;margin-top:4px">'
-            f'Last ~1 year of the front-month futures price, through {close.index[-1].date()}.</div></div>')
+    return (f'<div class="card" style="grid-column:1/-1"><h2>How the model\'s recent calls turned out</h2>'
+            f'<table><tr><th>Date</th><th>Suggestion</th><th>Move over next 3 days</th>'
+            f'<th>Result</th></tr>{"".join(rows)}</table>'
+            f'<div class="muted" style="font-size:11.5px;margin-top:8px">'
+            f'&ldquo;Move&rdquo; is how the price changed over the 3 days after each call. '
+            f'A HOLD is &ldquo;right&rdquo; when the price stayed roughly flat (within 1%). '
+            f'⏳ means it&rsquo;s too recent to know yet.</div></div>')
 
 
 def _forecast_panel() -> str:
@@ -176,20 +182,13 @@ def build_dashboard(publish: bool = False) -> None:
     chart = _svg_lines({"strategy (net)": (_COL["BUY"], eq),
                         "buy & hold": ("#9aa0a6", bh)})
 
-    recent = log[["raw_signal", "confidence", "final_signal"]].tail(12).iloc[::-1]
-    rows = "".join(
-        f'<tr><td>{i.date()}</td><td>{x.raw_signal}</td>'
-        f'<td>{x.confidence:.0%}</td>'
-        f'<td><b style="color:{_COL[x.final_signal]}">{x.final_signal}</b></td></tr>'
-        for i, x in recent.iterrows())
-
     gated = "" if sig == r["raw_signal"] else (
         f'<div class="note">The tool leaned toward <b>{r["raw_signal"]}</b>, but at only '
         f'{r["confidence"]:.0%} it isn\'t sure enough (it waits for {r["threshold"]:.0%}), '
         f'so the safer suggestion is to <b>hold</b> for now.</div>')
 
     fc = _forecast_panel()
-    price = _price_panel()
+    results = _recent_results_panel()
     how = _how_it_works()
 
     html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -226,13 +225,13 @@ have moved together, and suggests whether to <b>buy</b> (it expects the price to
   <div class="card reco">
     <span class="badge" style="background:{_COL[sig]}">{sig}</span>
     <div>
-      <div class="k">Suggestion for {r.name.date()} &nbsp;|&nbsp; last price {r['fcpo_close']:.0f}</div>
+      <div class="k">Suggestion for {r.name.date()}</div>
       <div class="v">How sure the tool is: {r['confidence']:.0%} &nbsp;(it only acts above {r['threshold']:.0%})</div>
       {gated}
     </div>
   </div>
 
-  {price}
+  {results}
 
   {fc}
 
@@ -258,11 +257,6 @@ have moved together, and suggests whether to <b>buy</b> (it expects the price to
     <div class="muted" style="font-size:12px;margin-top:6px">
       Worst drop along the way: following the tool {dd:.0%} vs. just holding {bh_dd:.0%}.
       The tool's main strength is losing much less when the market falls.</div>
-  </div>
-
-  <div class="card" style="grid-column:1/-1"><h2>Recent suggestions</h2>
-    <table><tr><th>Date</th><th>Leaning</th><th>How sure</th><th>Suggestion</th></tr>
-    {rows}</table>
   </div>
 
   {how}
