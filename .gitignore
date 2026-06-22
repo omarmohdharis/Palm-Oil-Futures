@@ -14,6 +14,8 @@ data/features/
 models/
 results/
 
+mpob/
 # NOTE: data/raw/ is intentionally NOT ignored — it holds manually downloaded,
 # hard-to-reproduce inputs (the FCPO CSV, future MPOB Excel files). Keep those
 # tracked. If you'd rather not commit them, add `data/raw/` here.
+
