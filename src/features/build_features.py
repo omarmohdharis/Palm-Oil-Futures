@@ -69,6 +69,70 @@ def _spread_features(panel: pd.DataFrame, z_window: int) -> pd.DataFrame:
     )
 
 
+def _sentiment_features(index: pd.DatetimeIndex, news_dir=None, lag: int = 1) -> pd.DataFrame:
+    """News-sentiment features per topic, aligned to trading days and lagged.
+
+    For each topic (data/raw/news/<topic>.csv from news_sentiment.py) we build:
+      <topic>_tone      : sentiment level
+      <topic>_tone_chg  : tone vs its recent average (anticipation / momentum)
+      <topic>_tone_z    : how stretched tone is (precedes the 'square-off' reversal)
+      <topic>_buzz      : article volume (attention / fear)
+
+    News is forward-filled onto trading days, then lagged by `lag` trading days so
+    only news available before each decision is used. Returns empty if no news has
+    been fetched yet — so the rest of the pipeline is unaffected until you run
+    `python -m src.ingestion.news_sentiment`.
+    """
+    news_dir = news_dir or (project_root() / "data" / "raw" / "news")
+    if not news_dir.exists():
+        return pd.DataFrame(index=index)
+
+    cols = {}
+    for path in sorted(news_dir.glob("*.csv")):
+        topic = path.stem
+        df = pd.read_csv(path, parse_dates=[0], index_col=0).sort_index()
+        # forward-fill news onto the trading calendar (news persists between prints)
+        aligned = df.reindex(index.union(df.index)).sort_index().ffill().reindex(index)
+        tone, vol = aligned.get("tone"), aligned.get("volume")
+        if tone is not None:
+            cols[f"{topic}_tone"] = tone.shift(lag)
+            cols[f"{topic}_tone_chg"] = (tone - tone.rolling(5).mean()).shift(lag)
+            roll = tone.rolling(21)
+            cols[f"{topic}_tone_z"] = ((tone - roll.mean()) / roll.std()).shift(lag)
+        if vol is not None:
+            cols[f"{topic}_buzz"] = vol.shift(lag)
+    return pd.DataFrame(cols, index=index)
+
+
+def _mpob_features(index: pd.DatetimeIndex, release_lag_days: int = 45) -> pd.DataFrame:
+    """MPOB monthly supply/demand features (stocks, production, exports), aligned
+    to trading days with a release lag so the model never sees a figure before it
+    was public.
+
+    MPOB publishes month M's data ~the 10th of month M+1. We shift each monthly
+    value forward by `release_lag_days` (~the release date), then forward-fill onto
+    trading days. For each series we add the level and its month-over-month change.
+    Returns empty if data/processed/mpob_monthly.parquet doesn't exist yet, so the
+    pipeline is unaffected until MPOB files are parsed. NaNs (pre-2023) are fine —
+    the gradient-boosted model handles them.
+    """
+    path = project_root() / load_config("data")["paths"]["processed"] / "mpob_monthly.parquet"
+    if not path.exists():
+        return pd.DataFrame(index=index)
+
+    monthly = pd.read_parquet(path).sort_index()
+    cols = {}
+    for col in monthly.columns:
+        level = monthly[col]
+        change = level.pct_change()                       # MoM change (computed monthly)
+        for name, ser in [(f"mpob_{col}", level), (f"mpob_{col}_chg", change)]:
+            eff = ser.copy()
+            eff.index = eff.index + pd.Timedelta(days=release_lag_days)   # ~public date
+            cols[name] = (eff.reindex(index.union(eff.index)).sort_index()
+                          .ffill().reindex(index))
+    return pd.DataFrame(cols, index=index)
+
+
 def build_features() -> pd.DataFrame:
     cfg = load_config("features")
     lags = cfg["returns"]["lags"]
@@ -78,6 +142,7 @@ def build_features() -> pd.DataFrame:
     panel = load_price_panel()
     rets = log_returns(panel)
 
+    # core price features — drop the warm-up rows where lags/rolling aren't filled
     features = pd.concat(
         [
             _lagged_returns(rets, lags),
@@ -85,14 +150,24 @@ def build_features() -> pd.DataFrame:
             _spread_features(panel, z_window).reindex(rets.index),
         ],
         axis=1,
-    )
+    ).dropna()
 
-    # Drop the warm-up rows where the longest lag / rolling window isn't filled.
-    before = len(features)
-    features = features.dropna()
-    print(f"[features] {features.shape[1]} columns, "
-          f"{features.shape[0]} rows after dropping {before - len(features)} "
-          f"warm-up rows ({features.index[0].date()} → {features.index[-1].date()})")
+    # news sentiment — joined WITHOUT dropping rows (early/missing tone stays blank;
+    # the gradient-boosted model handles NaNs natively)
+    sentiment = _sentiment_features(features.index)
+    if not sentiment.empty:
+        features = features.join(sentiment)
+        print(f"[features] + {sentiment.shape[1]} news-sentiment columns "
+              f"({sentiment.notna().any(axis=1).sum()} rows have sentiment)")
+
+    mpob = _mpob_features(features.index)
+    if not mpob.empty:
+        features = features.join(mpob)
+        print(f"[features] + {mpob.shape[1]} MPOB supply/demand columns "
+              f"({mpob.notna().any(axis=1).sum()} rows have MPOB data)")
+
+    print(f"[features] {features.shape[1]} columns, {features.shape[0]} rows "
+          f"({features.index[0].date()} → {features.index[-1].date()})")
 
     out_path = project_root() / load_config("data")["paths"]["features"] / "feature_matrix.parquet"
     save_parquet(features, out_path)

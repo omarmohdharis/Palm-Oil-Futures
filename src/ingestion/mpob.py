@@ -34,11 +34,13 @@ from bs4 import BeautifulSoup
 from src.utils.config import load_config, project_root
 from src.utils.io import save_parquet
 
-# Keyword → output column.  Matched case-insensitively against MPOB row labels.
-_MPOB_FIELDS = {
-    "production_kt":     ["production"],
-    "exports_kt":        ["export"],
-    "closing_stocks_kt": ["closing stock", "stock"],
+# Headline MPOB report rows we extract → output column. Verified against the real
+# "monthly closing stock" download. Add production/export labels here once those
+# files are seen (same report layout, different target rows).
+_MPOB_TARGETS = {
+    "TOTAL PALM OIL": "palm_oil_stocks",         # stocks report — headline closing stock
+    "TOTAL CRUDE PALM OIL": "cpo_stocks",        # stocks report
+    "MALAYSIA": "cpo_production",                 # production report — national total
 }
 
 _MONTHS = {
@@ -57,105 +59,144 @@ _WB_KNOWN_URL = (
 
 # ── MPOB monthly Excel ────────────────────────────────────────────────────────
 
-def _coerce_month(val) -> int | None:
-    """Map a cell to a month number (1-12) from a name, abbrev, or number."""
-    if isinstance(val, (int, float)) and 1 <= int(val) <= 12:
-        return int(val)
-    s = str(val).strip().lower()[:3]
-    return _MONTHS.get(s)
+def _month_num(val) -> int | None:
+    """Month number (1-12) from a month name/abbrev cell, else None."""
+    if not isinstance(val, str):
+        return None
+    return _MONTHS.get(val.strip().lower()[:3])
 
 
-def _parse_mpob_file(path) -> pd.DataFrame | None:
+def _parse_mpob_file(path, targets=None) -> pd.DataFrame | None:
     """
-    Parse one MPOB BEPI workbook into a monthly frame indexed by date,
-    with columns production_kt / exports_kt / closing_stocks_kt.
+    Parse one MPOB BEPI report workbook into a monthly frame indexed by date.
 
-    BEPI layouts vary, so this scans every sheet, finds rows whose first
-    cells match the _MPOB_FIELDS keywords, and reads the 12 monthly values
-    across the row.  When it cannot make sense of a sheet it prints the
-    layout so the keywords/orientation can be adjusted to the real file.
+    Verified against the real "monthly closing stock" download (2026-06). The
+    sheet holds two half-year blocks (Jan-Jun, Jul-Dec); each block has a row of
+    month names, a row of YEARS just below it, then product rows. Every month
+    spans TWO columns (prior year, current year), and unreported future months are
+    zero-filled. For each row named in `targets` we read every (year, month) value
+    and drop the zero placeholders.
     """
+    targets = {k.upper(): v for k, v in (targets or _MPOB_TARGETS).items()}
     try:
         xl = pd.ExcelFile(path, engine="openpyxl")
     except Exception as e:
         print(f"  [WARN] cannot open {path.name}: {e}")
         return None
 
-    year = _year_from_name(path.name)
-    found: dict[str, dict[int, float]] = {f: {} for f in _MPOB_FIELDS}
-
+    recs: dict[str, dict[pd.Timestamp, float]] = {}
     for sheet in xl.sheet_names:
         raw = xl.parse(sheet, header=None)
-        # locate a row of month headers to map column index → month
-        month_cols = _find_month_columns(raw)
-        if not month_cols:
-            continue
-        for _, row in raw.iterrows():
-            label = " ".join(str(v) for v in row[:2] if pd.notna(v)).lower()
-            for field, keys in _MPOB_FIELDS.items():
-                if found[field]:
+        for i in range(len(raw)):
+            month_cols = {c: m for c, v in raw.iloc[i].items() if (m := _month_num(v))}
+            if len(month_cols) < 3:                       # not a month-header row
+                continue
+            year_row = raw.iloc[i + 1]                    # years sit right below
+            for j in range(i + 2, len(raw)):
+                row_j = raw.iloc[j]
+                if sum(1 for v in row_j if _month_num(v)) >= 3:   # next block started
+                    break
+                field = targets.get(str(row_j.iloc[0]).strip().upper())
+                if not field:
                     continue
-                if any(k in label for k in keys):
-                    for col_idx, month in month_cols.items():
-                        val = pd.to_numeric(row.get(col_idx), errors="coerce")
-                        if pd.notna(val):
-                            found[field][month] = float(val)
+                for c, month in month_cols.items():
+                    for col in (c, c + 1):                # prior-year / current-year columns
+                        yr = pd.to_numeric(year_row.get(col), errors="coerce")
+                        val = pd.to_numeric(row_j.get(col), errors="coerce")
+                        if pd.notna(yr) and 1990 <= yr <= 2100 and pd.notna(val) and val > 0:
+                            recs.setdefault(field, {})[pd.Timestamp(int(yr), month, 1)] = float(val)
 
-    if not any(found.values()):
-        print(f"  [WARN] {path.name} — no recognisable production/export/stock rows.")
-        print(f"         sheets: {xl.sheet_names}  (year guessed: {year})")
-        print(f"         → share this file's layout so the parser can be tuned.")
+    if not recs:
+        print(f"  [WARN] {path.name} — none of {list(targets.values())} found. "
+              f"Sheets: {xl.sheet_names}. Share the layout to extend the parser.")
         return None
 
-    if year is None:
-        print(f"  [WARN] {path.name} — could not infer year from filename; skipping.")
-        return None
-
-    months = sorted({m for d in found.values() for m in d})
-    rows = []
-    for m in months:
-        rows.append({
-            "date": pd.Timestamp(year=year, month=m, day=1),
-            **{f: found[f].get(m) for f in _MPOB_FIELDS},
-        })
-    df = pd.DataFrame(rows).set_index("date").sort_index()
-    print(f"  parsed {path.name}: {len(df)} month(s) for {year}")
+    df = pd.DataFrame(recs).sort_index()
+    df.index.name = "date"
+    print(f"  parsed {path.name}: {len(df)} months "
+          f"({df.index.min().date()} → {df.index.max().date()}); fields {list(df.columns)}")
     return df
 
 
-def _find_month_columns(raw: pd.DataFrame) -> dict[int, int]:
-    """Return {column_index: month_number} from the first row that looks like
-    a Jan..Dec header band."""
-    for _, row in raw.iterrows():
-        mapping = {}
-        for col_idx, v in row.items():
-            m = _coerce_month(v) if isinstance(v, str) else None
-            if m:
-                mapping[col_idx] = m
-        if len(mapping) >= 6:          # at least half a year of headers
-            return mapping
-    return {}
+def _parse_exports_file(path) -> pd.DataFrame | None:
+    """
+    Parse an MPOB monthly EXPORTS workbook (a different, single-year layout):
+    one header row of month names (JAN..DEC) across the columns, then product rows
+    each split into a 'Tonnes' and an 'RM Mil' sub-row. We take PALM OIL (Tonnes)
+    for each month of the file's year. Future months are zero-filled and skipped.
+    """
+    try:
+        raw = pd.ExcelFile(path, engine="openpyxl").parse(0, header=None)
+    except Exception as e:
+        print(f"  [WARN] cannot open {path.name}: {e}")
+        return None
 
+    text = " ".join(str(v) for v in raw.iloc[0] if pd.notna(v)) + " " + path.stem
+    ym = re.search(r"(19|20)\d{2}", text)
+    if not ym:
+        print(f"  [WARN] {path.name} — no year found in title/filename; skipping.")
+        return None
+    year = int(ym.group(0))
 
-def _year_from_name(name: str) -> int | None:
-    m = re.search(r"(19|20)\d{2}", name)
-    return int(m.group(0)) if m else None
+    header_i, month_cols = None, {}
+    for i in range(len(raw)):
+        # months are exact tokens (JAN, JUNE…); the 'JAN - MAY' total has spaces so len>4 excludes it
+        mc = {c: m for c, v in raw.iloc[i].items()
+              if isinstance(v, str) and len(v.strip()) <= 4 and (m := _month_num(v))}
+        if len(mc) >= 6:
+            header_i, month_cols = i, mc
+            break
+    if header_i is None:
+        print(f"  [WARN] {path.name} — no month-header row found.")
+        return None
+
+    recs: dict[pd.Timestamp, float] = {}
+    for j in range(header_i + 1, len(raw)):
+        if (str(raw.iat[j, 0]).strip().upper() == "PALM OIL"
+                and str(raw.iat[j, 1]).strip().lower() == "tonnes"):
+            row_j = raw.iloc[j]
+            for c, month in month_cols.items():
+                val = pd.to_numeric(row_j.get(c), errors="coerce")
+                if pd.notna(val) and val > 0:
+                    recs[pd.Timestamp(year, month, 1)] = float(val)
+            break
+    if not recs:
+        print(f"  [WARN] {path.name} — 'PALM OIL / Tonnes' row not found.")
+        return None
+
+    df = pd.DataFrame({"palm_oil_exports": recs}).sort_index()
+    df.index.name = "date"
+    print(f"  parsed {path.name}: {len(df)} months "
+          f"({df.index.min().date()} → {df.index.max().date()}); fields ['palm_oil_exports']")
+    return df
 
 
 def fetch_mpob_monthly() -> pd.DataFrame | None:
+    from functools import reduce
+
     raw_dir = project_root() / "data" / "raw" / "mpob"
-    files = sorted(raw_dir.glob("mpob_*.xls*"))
+    files = sorted(raw_dir.glob("*.xls*"))
     if not files:
         print("[→] MPOB monthly — no files found in data/raw/mpob/")
         _print_mpob_instructions()
         return None
 
     print(f"[→] MPOB monthly — parsing {len(files)} file(s) …")
-    frames = [df for f in files if (df := _parse_mpob_file(f)) is not None]
+    frames = []
+    for f in files:                                  # route by report type
+        parser = _parse_exports_file if "export" in f.name.lower() else _parse_mpob_file
+        df = parser(f)
+        if df is not None:
+            frames.append(df)
     if not frames:
         return None
-    combined = pd.concat(frames).sort_index()
-    combined = combined[~combined.index.duplicated(keep="last")]
+
+    # merge on date across metrics/years (union of columns, fill gaps)
+    combined = reduce(lambda a, b: a.combine_first(b), frames).sort_index()
+
+    out = project_root() / "data" / "processed" / "mpob_monthly.parquet"
+    save_parquet(combined, out)
+    print(f"[OK] MPOB monthly: {len(combined)} months × {list(combined.columns)} → {out}")
     return combined
 
 

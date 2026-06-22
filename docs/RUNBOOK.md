@@ -37,6 +37,19 @@ If you skip IBKR, you have two manual options for the FCPO price:
 Everything else (soybean oil, Brent, WTI, USD/MYR, World Bank price) downloads
 automatically — no manual step.
 
+**News sentiment (optional, free via GDELT).** To add news-sentiment features
+(tone, momentum, stretch, buzz for palm oil / crude / soybean / weather):
+```
+python -m src.ingestion.news_sentiment   # pull tone+volume → data/raw/news/
+python -m src.features.build_features     # now includes sentiment columns
+python -m src.processing.label            # rebuild the modeling dataset
+python -m src.models.gbm                  # retrain
+python -m src.backtest.backtest oos_predictions_gbm.parquet   # did NET Sharpe improve?
+python -m src.serving.freeze              # bake in ONLY if it helped
+```
+Judge it by **net Sharpe**, not accuracy. GDELT limits requests to 1/5s; the
+fetcher throttles automatically. Tone is a broad proxy — fine as a signal, not gospel.
+
 ---
 
 ## 2. Freeze a model (once, then on a cadence)

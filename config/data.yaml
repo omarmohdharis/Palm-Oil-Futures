@@ -22,3 +22,14 @@ paths:
   features: "data/features"
   models: "models"
   results: "results"
+
+# News sentiment (GDELT, free, no key). Queries are tunable.
+# GDELT DOC 2.0 tone coverage is reliable from ~2017 onward; earlier rows will be
+# blank, which the gradient-boosted model handles natively.
+news:
+  start: "2017-01-01"
+  topics:
+    palm_oil: '"palm oil"'
+    crude_oil: '"crude oil" OR brent'           # biodiesel link to palm
+    soybean: 'soybean OR soyoil'                 # substitute oil / crop news
+    weather_palm: '(drought OR "el nino" OR "la nina" OR monsoon OR flood) (palm OR malaysia OR indonesia)'
