@@ -65,6 +65,7 @@ def backfill_from_oos() -> None:
 def _score(log: pd.DataFrame) -> pd.DataFrame:
     close = _fcpo_close().sort_index()
     fwd = close.shift(-_HORIZON) / close - 1.0          # realised 3-day move
+    hold_band = load_config("features")["label"]["buy_threshold"]   # same band as labels
     s = log.copy()
     s["fwd_ret_3d"] = fwd.reindex(s.index)
     s = s.dropna(subset=["fwd_ret_3d"])                 # keep only signals with an outcome
@@ -72,7 +73,7 @@ def _score(log: pd.DataFrame) -> pd.DataFrame:
     s["position"] = s["final_signal"].map(pos)
     s["realised_pnl"] = s["position"] * s["fwd_ret_3d"]
     s["correct"] = np.where(
-        s["final_signal"] == "HOLD", s["fwd_ret_3d"].abs() <= 0.01,
+        s["final_signal"] == "HOLD", s["fwd_ret_3d"].abs() <= hold_band,
         s["realised_pnl"] > 0)
     return s
 

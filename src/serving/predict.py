@@ -34,7 +34,7 @@ def _load_registry() -> dict:
     return json.loads(path.read_text())
 
 
-def _latest_features(reg: dict) -> pd.Series:
+def _latest_features(reg: dict) -> tuple[pd.Series, pd.Timestamp]:
     feat_path = project_root() / load_config("data")["paths"]["features"] / "feature_matrix.parquet"
     feats = load_parquet(feat_path).sort_index()
     row = feats.iloc[-1]

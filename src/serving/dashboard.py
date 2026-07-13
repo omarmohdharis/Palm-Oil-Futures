@@ -99,6 +99,7 @@ def _recent_results_panel() -> str:
     log = load_parquet(project_root() / load_config("serve")["signals"]["log"]).sort_index()
     close = _fcpo_close().sort_index()
     move = (close.shift(-3) / close - 1.0).reindex(log.index)   # price move over next 3 days
+    hold_band = load_config("features")["label"]["buy_threshold"]
 
     rows = []
     for d, x in log.assign(move=move).tail(8).iloc[::-1].iterrows():
@@ -107,7 +108,7 @@ def _recent_results_panel() -> str:
         if pd.isna(m):
             move_txt, result = "—", '<span class="muted">⏳ too recent</span>'
         else:
-            ok = abs(m) <= 0.01 if sug == "HOLD" else (m > 0 if sug == "BUY" else m < 0)
+            ok = abs(m) <= hold_band if sug == "HOLD" else (m > 0 if sug == "BUY" else m < 0)
             move_txt = f"{m:+.1%}"
             result = '<span style="color:#1d9e75">✅ right</span>' if ok \
                 else '<span style="color:#d8503a">❌ wrong</span>'

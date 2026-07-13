@@ -14,3 +14,6 @@ scikit-learn>=1.4    # Phase 5 modeling: logistic baseline, walk-forward eval
 joblib>=1.3          # Phase 8 serving: persist/load the frozen model
 ib_async>=2.0        # Phase 8 serving: IBKR paper-account FCPO data feed
                      # (maintained fork of the archived ib_insync; same API)
+# Primary FCPO feed: TradingView MYX:FCPO1! (anonymous). Not on PyPI — install:
+#   pip install git+https://github.com/rongardF/tvdatafeed.git
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git

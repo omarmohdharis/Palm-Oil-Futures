@@ -1,6 +1,6 @@
+# NOTE: no static end date — every fetcher rolls forward to "today" on its own.
 dates:
   start: "2015-01-01"
-  end: "2026-06-16"
 
 # yfinance tickers for related instruments (all on US exchanges, very clean)
 tickers:
@@ -10,11 +10,12 @@ tickers:
   usdmyr: "MYR=X"        # USD/MYR spot
 
 fcpo:
-  # Tried in order; coverage is inconsistent — fall back to manual CSV if empty
-  yfinance_candidates:
-    - "FCPO.KL"
-    - "KPO=F"
-  # Any *.csv placed in data/raw/fcpo/ is auto-detected (Investing.com or standard OHLCV)
+  # Primary feed: TradingView MYX:FCPO1! via tvdatafeed (see src/ingestion/fcpo.py
+  # for the trade-date mapping — bar date + 1 day; do NOT "simplify" it away).
+  # investing.com id kept for cross-checks only: FCPOc1 / Kuala Lumpur = 992745.
+  # Its 2025+ rows are stamped a day early and drop Mondays — never merge them.
+  # The CME USD contract (CPOc1 = 1213133) is a DIFFERENT instrument.
+  investing_id: 992745
 
 paths:
   raw: "data/raw"

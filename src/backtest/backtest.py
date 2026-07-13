@@ -112,11 +112,11 @@ def adaptive_backtest(oos, close, asset_ret, costs, capital, lag,
         chosen.append(best)
     eval_idx = oos.index[warmup:]
     out, sides = _simulate(desired, close, asset_ret, costs, capital, lag)
-    ev = out.loc[eval_idx]
-    equity = (1 + ev["net_ret"]).cumprod() * capital
-    m = _metrics(ev["net_ret"], equity, "adaptive (honest)")
+    ev = out.loc[eval_idx].copy()
+    ev["equity"] = (1 + ev["net_ret"]).cumprod() * capital
+    m = _metrics(ev["net_ret"], ev["equity"], "adaptive (honest)")
     n_tr = int((sides.loc[eval_idx] > 0).sum())
-    return m, n_tr, pd.Series(chosen)
+    return m, n_tr, pd.Series(chosen), ev
 
 
 def _metrics(returns: pd.Series, equity: pd.Series, label: str) -> dict:
@@ -170,7 +170,7 @@ def run_backtest(pred_name: str = "oos_predictions.parquet") -> pd.DataFrame:
           f"net Sharpe={best_m['sharpe']:.2f}  trades={best_trades} (was {trades_full} @0.00)")
 
     # ── honest, no-peeking threshold selection ──
-    am, an_tr, chosen = adaptive_backtest(oos, close, asset_ret, costs, capital, lag)
+    am, an_tr, chosen, adaptive_out = adaptive_backtest(oos, close, asset_ret, costs, capital, lag)
     print(f"[adaptive — HONEST, past data only] net Sharpe={am['sharpe']:.2f}  "
           f"total={am['total_return']:.1%}  maxDD={am['max_drawdown']:.1%}  trades={an_tr}  "
           f"(thresholds used: {chosen.value_counts().to_dict()})")
@@ -178,6 +178,11 @@ def run_backtest(pred_name: str = "oos_predictions.parquet") -> pd.DataFrame:
     # ── full report at the best threshold vs benchmarks ──
     out = best_out
     out["equity_buyhold"] = bh_equity
+
+    # The SAVED artifact (what the dashboard displays) is the HONEST adaptive
+    # curve — the sweep-best above peeks at the test set and stays console-only.
+    adaptive_out["equity_buyhold"] = ((1 + asset_ret.loc[adaptive_out.index]).cumprod()
+                                      * capital)
     m_net = _metrics(out["net_ret"], out["equity"], f"strategy net (thr={best_thr})")
     m_gross = _metrics(out["gross_ret"], (1 + out["gross_ret"]).cumprod() * capital, "strategy gross")
     m_bh = _metrics(asset_ret, bh_equity, "buy & hold")
@@ -188,17 +193,17 @@ def run_backtest(pred_name: str = "oos_predictions.parquet") -> pd.DataFrame:
         "total_return": "{:.1%}".format,
     }))
 
-    # ── plot ──
+    # ── plot (honest adaptive curve) ──
     out_dir = project_root() / "results" / "phase7"
     out_dir.mkdir(parents=True, exist_ok=True)
-    ax = out[["equity", "equity_buyhold"]].plot(
-        figsize=(11, 5), title="Phase 7 — strategy (net) vs buy & hold")
+    ax = adaptive_out[["equity", "equity_buyhold"]].plot(
+        figsize=(11, 5), title="Phase 7 — strategy (net, honest adaptive) vs buy & hold")
     ax.set_ylabel("equity (MYR)")
     ax.figure.tight_layout()
     ax.figure.savefig(out_dir / "equity_curve.png", dpi=120)
     plt.close(ax.figure)
 
-    save_parquet(out, out_dir / "backtest.parquet")
+    save_parquet(adaptive_out, out_dir / "backtest.parquet")
     print(f"\n[OK] Phase 7 backtest → {out_dir / 'backtest.parquet'}")
     print(f"     equity curve  → {out_dir / 'equity_curve.png'}")
     return out

@@ -30,7 +30,9 @@ def _db_path() -> Path:
 
 
 def _manual_path() -> Path:
-    return project_root() / "data" / "raw" / "fcpo" / "fcpo_manual.csv"
+    # MYR series (post 2026-07-13). The old fcpo_manual.csv held USD-scale
+    # prices for the wrong contract and is deliberately no longer merged.
+    return project_root() / "data" / "raw" / "fcpo" / "fcpo_manual_myr.csv"
 
 
 def _load(path: Path) -> pd.DataFrame:
@@ -92,7 +94,7 @@ def _ask_price(day: pd.Timestamp) -> float | None:
                 continue
             return val
         except ValueError:
-            print("    that doesn't look like a number — try again (e.g. 1116).")
+            print("    that doesn't look like a number — try again (e.g. 4513, in RM/tonne).")
 
 
 def main() -> None:

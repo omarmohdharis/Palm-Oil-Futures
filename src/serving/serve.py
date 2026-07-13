@@ -43,7 +43,9 @@ def serve(run_monitor: bool = False) -> None:
 
     _step("refresh related (yfinance)", fetch_related)
     _step("refresh FCPO (IBKR)", fetch_fcpo_ibkr)
-    _step("merge FCPO CSVs", fetch_fcpo)        # consolidates IBKR + any manual drops
+    _step("refresh FCPO (TradingView + merge)", fetch_fcpo)
+    from src.ingestion.news_sentiment import fetch_all as fetch_news
+    _step("refresh news sentiment (GDELT)", fetch_news)   # fails soft when IP-blocked
     _step("build features", build_features)
 
     # prediction is the deliverable — if it fails we want to see it loudly

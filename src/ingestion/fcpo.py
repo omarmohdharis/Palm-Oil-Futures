@@ -1,161 +1,188 @@
 """
-FCPO (Crude Palm Oil Futures) data ingestion.
+FCPO ingestion — Bursa Malaysia crude palm oil futures (FCPO), MYR/tonne.
 
-Tries sources in this order:
-  1. yfinance       — free but spotty; may return partial history or nothing
-  2. Manual CSV     — place downloaded files in data/raw/fcpo/ and re-run
+Primary source : TradingView MYX:FCPO1! daily bars via tvdatafeed (anonymous).
+                 One request returns the full ~20y history, including sessions
+                 investing.com drops. Values verified against official Bursa
+                 settlements (MPOC) on 2026-07-13.
+Validation     : MPOC daily settlement table (official, courtesy of Bursa).
+Fallbacks      : data/raw/fcpo/fcpo_ibkr.csv        (IBKR feed, if connected)
+                 data/raw/fcpo/fcpo_manual_myr.csv  (typed via fcpo_manual.py)
 
-Accepted CSV formats (auto-detected):
-  a) Investing.com export  : Date, Price, Open, High, Low, Vol., Change %
-  b) Standard OHLCV        : date, open, high, low, close[, volume]
+── Date convention (empirically pinned 2026-07-13 — do not "simplify") ───────
+FCPO's trade date T starts with the After-Hours night session at 21:00 MYT on
+T-1 (Bursa: "trades performed during T+1 are included in the following day's
+session"). TradingView stamps the daily bar at that session OPEN, rendered in
+US-Eastern time — i.e. the bar is dated T-1. Monday sessions have no night
+portion, so their bar opens at the 10:30 MYT day open = Sunday ~22:00 EDT.
+Therefore: TRADE DATE = TV bar date + 1 calendar day, and the mapping restores
+a normal Mon–Fri session calendar that matches MPOC settlement dates exactly.
 
-Run with no FCPO files present to see download instructions.
+The last TV bar is the CURRENTLY OPEN session (settles 18:00 MYT on its trade
+date); it is dropped until settled so the model never sees a live/partial bar.
+
+investing.com (kept as fcpo_investing_myr.csv for cross-checks only) moved to
+the same night-open stamping in Jan-2025 AND drops the Sunday-stamped rows, so
+its 2025+ data is one day off and missing all Mondays — never merge it.
+
+── Instrument history note (2026-07-13) ──────────────────────────────────────
+Before this date the project was accidentally built on investing.com "CPOc1",
+CME's USD-denominated palm contract (~1/4 the MYR price, settlement-only
+prints). Old files stay untouched in data/raw/fcpo/ but are EXCLUDED from the
+merge. Mixing the two denominations corrupts every return downstream.
+
+Run: python -m src.ingestion.fcpo
 """
 
-import re
 import datetime as dt
+import io
+
 import pandas as pd
-import yfinance as yf
-from pathlib import Path
+import requests
 
 from src.utils.config import load_config, project_root
 from src.utils.io import save_raw_csv
 
-_INVESTING_MONTHS = {
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5,  "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-}
+_MPOC = "https://www.mpoc.org.my/market-insight/daily-palm-oil-prices/"
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+_MYT = dt.timezone(dt.timedelta(hours=8))
+# canonical MYR inputs, in merge order — LATER WINS on overlapping dates
+_INPUTS = ["fcpo_tradingview_myr.csv", "fcpo_ibkr.csv", "fcpo_manual_myr.csv"]
 
 
-# ── CSV parsers ────────────────────────────────────────────────────────────────
+# ── TradingView primary feed ──────────────────────────────────────────────────
 
-def _parse_investing_date(s: str) -> pd.Timestamp:
-    s = s.strip().replace(",", "")
-    parts = s.split()
-    if len(parts) == 3:
-        m = _INVESTING_MONTHS.get(parts[0].lower())
-        if m:
-            return pd.Timestamp(year=int(parts[2]), month=m, day=int(parts[1]))
-    return pd.Timestamp(s)
+def refresh_tradingview() -> pd.DataFrame | None:
+    """Pull MYX:FCPO1! daily bars, map to trade dates, upsert the cache.
 
+    tvdatafeed returns the whole history in one call, so every run self-heals
+    past gaps. On any failure we keep serving from the existing cache."""
+    cache = project_root() / "data" / "raw" / "fcpo" / "fcpo_tradingview_myr.csv"
+    start = pd.Timestamp(load_config("data")["dates"]["start"])
 
-def _parse_investing_csv(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df.columns = [c.strip().strip('"') for c in df.columns]
-    df["date"] = df["Date"].apply(_parse_investing_date)
-    df = df.set_index("date").sort_index()
-    for col in ["Price", "Open", "High", "Low"]:
-        if col in df.columns:
-            df[col] = (
-                df[col].astype(str)
-                .str.replace(",", "", regex=False)
-                .str.replace('"', "", regex=False)
-            )
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df.rename(columns={"Price": "close", "Open": "open",
-                               "High": "high",  "Low":  "low"})[
-        [c for c in ["open", "high", "low", "close"] if c in df.rename(
-            columns={"Price": "close", "Open": "open", "High": "high", "Low": "low"}
-        ).columns]
-    ].copy()
-
-
-def _parse_standard_csv(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, parse_dates=[0], index_col=0)
-    df.index.name = "date"
-    df.columns = [c.strip().lower() for c in df.columns]
-    keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-    return df[keep].sort_index()
-
-
-def _load_csv(path: Path) -> pd.DataFrame | None:
     try:
-        header = path.read_text(encoding="utf-8", errors="ignore").split("\n")[0]
-        if "Change %" in header or "Vol." in header:
-            return _parse_investing_csv(path)
-        return _parse_standard_csv(path)
+        from tvDatafeed import TvDatafeed, Interval
+        bars = TvDatafeed().get_hist(symbol="FCPO1!", exchange="MYX",
+                                     interval=Interval.in_daily, n_bars=5000)
+        if bars is None or bars.empty:
+            raise RuntimeError("no bars returned")
     except Exception as e:
-        print(f"  [WARN] could not parse {path.name}: {e}")
+        print(f"[fcpo] TradingView fetch failed: {e}")
+        print("       Continuing on the cached series (if any).")
         return None
 
+    df = bars[["open", "high", "low", "close", "volume"]].copy()
+    # bar stamp = session open on T-1 (see module docstring) -> trade date = +1 day
+    df.index = pd.to_datetime(df.index).normalize() + pd.Timedelta(days=1)
+    df.index.name = "date"
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    df = df[df.index >= start]
 
-# ── yfinance attempt ───────────────────────────────────────────────────────────
+    # drop the still-open session: its settlement prints 18:00 MYT on trade date
+    now_myt = dt.datetime.now(_MYT)
+    settled_through = pd.Timestamp(now_myt.date())
+    if now_myt.hour < 18:
+        settled_through -= pd.Timedelta(days=1)
+    live = df.index > settled_through
+    if live.any():
+        print(f"[fcpo] dropping {live.sum()} unsettled session(s): "
+              f"{', '.join(str(d.date()) for d in df.index[live])}")
+        df = df[~live]
 
-def _try_yfinance(candidates: list[str], start: str, end: str) -> pd.DataFrame | None:
-    for ticker in candidates:
-        print(f"  trying yfinance ticker {ticker!r} …")
-        df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-        if df.empty:
-            print("    no data returned")
-            continue
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        df.index = pd.to_datetime(df.index)
-        df.index.name = "date"
-        df.columns = [c.lower() for c in df.columns]
-        keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-        df = df[keep]
-        print(f"    {len(df):,} rows returned")
-        return df
-    return None
+    if cache.exists():                       # never lose rows TV stops serving
+        old = pd.read_csv(cache, parse_dates=["date"], index_col="date")
+        df = pd.concat([old, df])
+        df = df[~df.index.duplicated(keep="last")].sort_index()
 
-
-# ── public entry point ─────────────────────────────────────────────────────────
-
-def fetch_fcpo(start: str | None = None, end: str | None = None) -> pd.DataFrame | None:
-    cfg = load_config("data")
-    start = start or cfg["dates"]["start"]
-    end = end or (dt.date.today() + dt.timedelta(days=1)).isoformat()   # roll forward to today
-    raw_dir = project_root() / cfg["paths"]["raw"] / "fcpo"
-
-    print("[→] FCPO — attempting yfinance …")
-    df = _try_yfinance(cfg["fcpo"]["yfinance_candidates"], start, end)
-
-    # yfinance is considered insufficient if it returns fewer than 100 rows
-    if df is None or len(df) < 100:
-        print("[→] FCPO — yfinance insufficient; scanning data/raw/fcpo/ for CSVs …")
-        csvs = sorted(raw_dir.glob("*.csv"))
-        if not csvs:
-            _print_manual_instructions()
-            return None
-        frames = [_load_csv(p) for p in csvs]
-        frames = [f for f in frames if f is not None and not f.empty]
-        if not frames:
-            print("[ERROR] found CSVs but could not parse any — check file format")
-            return None
-        df = pd.concat(frames).sort_index()
-        df = df[~df.index.duplicated(keep="last")]
-        print(f"  merged {len(csvs)} CSV file(s) → {len(df):,} rows total")
-
-    save_raw_csv(df, raw_dir / "fcpo_raw.csv")
+    df.to_csv(cache)
+    print(f"[fcpo] TradingView MYR series: {len(df):,} rows "
+          f"({df.index[0].date()} -> {df.index[-1].date()}) -> {cache.name}")
     return df
 
 
-def _print_manual_instructions() -> None:
-    print("""
-[ACTION REQUIRED] No usable FCPO data found.
+# ── MPOC official settlement cross-check ─────────────────────────────────────
 
-Option A — Investing.com (quickest, no account needed):
-  1. Go to:  investing.com → Commodities → Crude Palm Oil → Historical Data
-  2. Set date range: Jan 2015 → today
-  3. Click "Download Data" (CSV)
-  4. Move the downloaded file into:  data/raw/fcpo/
-  5. Re-run this script
+def _mpoc_settlements() -> pd.Series | None:
+    """Recent official Bursa settlements. MPOC's 'Pricing Date' IS the trade
+    date (verified by value alignment 2026-07-13) — no shift."""
+    try:
+        r = requests.get(_MPOC, headers={"User-Agent": _UA}, timeout=30)
+        r.raise_for_status()
+        tables = pd.read_html(io.StringIO(r.text))
+        t = next(t for t in tables if "Settlement Price RM" in t.columns)
+        return pd.Series(
+            pd.to_numeric(t["Settlement Price RM"], errors="coerce").values,
+            index=pd.to_datetime(t["Pricing Date"], format="%d %b %y"),
+            name="mpoc_settlement",
+        ).dropna().sort_index()
+    except Exception as e:
+        print(f"[fcpo] MPOC cross-check unavailable ({e}) — skipping validation")
+        return None
 
-Option B — Barchart.com (standard OHLCV format):
-  1. Search "FCPO Continuous" at barchart.com
-  2. Download historical data (free tier ≈ 1 year; paid = full history)
-  3. Move CSV into data/raw/fcpo/  — standard OHLCV is auto-detected
 
-Option C — IBKR paper account (cleanest programmatic path):
-  1. Open a free paper trading account at interactivebrokers.com
-  2. Install:  pip install ib_insync
-  3. Connect to Trader Workstation (TWS) and request FCPO on exchange MDEX
-  4. Export as CSV and move to data/raw/fcpo/
+def validate_vs_mpoc(close: pd.Series) -> None:
+    """Warn loudly if our series disagrees with official settlements."""
+    mpoc = _mpoc_settlements()
+    if mpoc is None or mpoc.empty:
+        return
+    both = pd.concat([close.rename("ours"), mpoc], axis=1, join="inner").dropna()
+    if both.empty:
+        print("[fcpo] MPOC cross-check: no overlapping dates yet")
+        return
+    diff = (both["ours"] / both["mpoc_settlement"] - 1).abs()
+    bad = both[diff > 0.005]
+    if len(bad):
+        print(f"[fcpo] WARNING — {len(bad)}/{len(both)} closes differ >0.5% from "
+              f"official Bursa settlements (check date mapping / roll):")
+        print(bad.assign(diff_pct=(diff[bad.index] * 100).round(2)).to_string())
+    else:
+        print(f"[fcpo] MPOC cross-check OK — {len(both)}/{len(both)} closes match "
+              f"official settlements (incl. dates investing.com lacks)")
 
-Cross-check tip: if you get data from two sources, load both CSVs into
-data/raw/fcpo/ — the parser merges them and deduplicates by date.
-""")
+
+# ── canonical merge ───────────────────────────────────────────────────────────
+
+def fetch_fcpo() -> pd.DataFrame | None:
+    """Refresh the TradingView feed, then rebuild fcpo_raw.csv from the explicit
+    MYR allowlist (later files win on overlap; output is never an input)."""
+    raw_dir = project_root() / "data" / "raw" / "fcpo"
+
+    refresh_tradingview()
+
+    frames = []
+    for name in _INPUTS:
+        path = raw_dir / name
+        if not path.exists():
+            continue
+        df = pd.read_csv(path, parse_dates=[0], index_col=0)
+        df.index = pd.to_datetime(df.index).normalize()
+        df.index.name = "date"
+        df.columns = [c.strip().lower() for c in df.columns]
+        keep = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+        frames.append(df[keep])
+        print(f"[fcpo] merged {name}: {len(df):,} rows")
+
+    if not frames:
+        print("[fcpo] ERROR — no MYR input files at all. Run this module once with "
+              "internet access, or add prices via fcpo_manual.py.")
+        return None
+
+    merged = pd.concat(frames).sort_index()
+    merged = merged[~merged.index.duplicated(keep="last")]
+
+    # sanity guard: MYR FCPO has traded ~1,800-5,500 since 2015; anything near
+    # ~1,100 is the old USD series sneaking back in through a stray file
+    suspicious = merged["close"] < 1500
+    if suspicious.any():
+        print(f"[fcpo] WARNING — dropped {suspicious.sum()} rows with close < RM1,500 "
+              f"(USD-denominated contamination?):")
+        print(merged.loc[suspicious, "close"].tail().to_string())
+        merged = merged[~suspicious]
+
+    save_raw_csv(merged, raw_dir / "fcpo_raw.csv")
+    validate_vs_mpoc(merged["close"])
+    return merged
 
 
 if __name__ == "__main__":
