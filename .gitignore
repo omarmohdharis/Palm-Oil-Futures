@@ -19,3 +19,6 @@ mpob/
 # hard-to-reproduce inputs (the FCPO CSV, future MPOB Excel files). Keep those
 # tracked. If you'd rather not commit them, add `data/raw/` here.
 
+
+# ── Task Scheduler run logs ──
+logs/
